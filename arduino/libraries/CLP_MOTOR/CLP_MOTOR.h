@@ -33,6 +33,8 @@ public:
   void CLP_MOTOR_Initial_all(uint8_t PUL,uint8_t DIR,uint8_t ENA);
   void setCLPMTR_Forward();
   void setCLPMTR_Reverse();  
+  boolean setCLPMTR_CW();
+  boolean setCLPMTR_CCW();
   void setCLPMTR_HIGH();
   void setCLPMTR_LOW();
   void setCLPMTR_Enable();

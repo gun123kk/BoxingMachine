@@ -10,9 +10,12 @@
 //DATE：2017/10/22
 //馬達控制功能失效 i2c占用timer 改用TIMER4 與TIMER5
 //ENA如果設定為DISABLE 會失去靜態扭矩
+//CLPMotor driver(Hybird Servo Drive) Pulse need to set 1600
 //--------------------------------------
 #include <Wire.h>
 #include <CLP_MOTOR.h>
+#include <LiquidCrystal_I2C.h>
+ LiquidCrystal_I2C lcd(0x27,16,2);
 //*===========================================*
 //定義區
 //*===========================================*
@@ -22,6 +25,7 @@
 CLPMTR *CLPM_tester = new CLPMTR;
 #define testerPUL  22
 #define testerDIR  23
+#define pulseChange  16
 boolean CLPM_testerArrive = 0;
 int receiveStep = 0;
 boolean CLPM_CW_CCW = 0;      //0 CW ,1 CCW
@@ -51,7 +55,6 @@ byte CLPMTRSpeed;
 boolean testbtnCW=0;
 //==============================
 
-
 //====================================
 //interrput
 //====================================
@@ -62,20 +65,26 @@ int ABPCounter = 0;
 byte  APstatus = 0;
 byte  BPstatus = 0;
 int ABPhaseCounter=0;
+char LCD_row1[16];        //0000 RPM DIR:CW
+char LCD_row2[16];        //0000 steps 
+//==============================
+ 
 //*===========================================*
 
 
+  
 //*===========================================*
 //初始化區
 //*===========================================*
 void setup() {
   Serial.begin(9600);
   CLPMTR_initial();
-  interrupt_initial();
+  interrupt_initial();  
   //Timer4_initial();
   //Timer5_initial();
   controlBoard_initial();
   CLPMspeed_initial();
+  LCD_initial();
   delay(100);
   Serial.println("start");
 }
@@ -84,33 +93,32 @@ void setup() {
 //*===========================================*
 //主程式區
 //*===========================================*
-void loop() {
+void loop() { 
   
-  boolean btnCW = digitalRead(pin_btnCW);   //BUTTON DOWN =LOW NORMAL=HIGH
   static int counter = 0;
+  int counterLT=100*pulseChange/10;
   CLPM_tester->setCLPMTR_LOW();
-  //if(!btnCW){
-  //delay(20);
-  if (counter < 1000) {
-    counter++;
+  
+  if (counter < counterLT) {    
     CLPM_tester->setCLPMTR_HIGH();
-    delayMicroseconds(500);
+    delayMicroseconds(50);
     CLPM_tester->setCLPMTR_LOW();
-    delayMicroseconds(500);
-    //Serial.print(F("counter:"));
-    //Serial.println(counter);
-    //while(digitalRead(pin_btnCW)==0){
-    //delay(20);
+    delayMicroseconds(50);
+    counter++;    
+  }  
+  
+  if (counter == counterLT) {
+    int rp=receiveStep;        
+    stepChange(rp);  
+    showOnLcd(1,LCD_row1);    
+    showOnLcd(2,LCD_row2);
+    counter = counterLT+100;
+    receiveStep=0;
   }
 
-  if (counter == 1000) {
-    delay(20);   
-      Serial.print(receiveStep);
-      Serial.println(F(" STEP"));
-    counter = 1800;
-  }
   //
   /*
+   boolean btnCW = digitalRead(pin_btnCW);   //BUTTON DOWN =LOW NORMAL=HIGH
    static int once=0;
       if(once==0){
           once=1;
@@ -137,10 +145,8 @@ void loop() {
 //====================================
 void CLPMTR_initial() {
  CLPM_tester->CLP_MOTOR_Initial(testerPUL,testerDIR); 
-  CLPM_tester->setCLPMTR_LOW();
-  CLPM_tester->setCLPMTR_Reverse();
- //CLPM_tester->setCLPMTR_Forward();
- CLPM_CW_CCW = 1;
+ CLPM_tester->setCLPMTR_LOW();
+ CLPM_CW_CCW=CLPM_tester->setCLPMTR_CW();
 }
 //==============================
 
@@ -205,8 +211,6 @@ void Timer5_initial() {
 }
 //==============================
 
-
-
 //====================================
 // interrupt_initial
 //====================================
@@ -214,7 +218,39 @@ void interrupt_initial() {
   pinMode(encoderAPhase, INPUT_PULLUP);
   pinMode(encoderBPhase, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(encoderAPhase), detectABPhase, CHANGE );
-  attachInterrupt(digitalPinToInterrupt(encoderBPhase), detectABPhase, CHANGE );
+  attachInterrupt(digitalPinToInterrupt(encoderBPhase), detectABPhase, CHANGE );   
+}
+//==============================
+
+//====================================
+// interrupt_initial
+//====================================
+void LCD_initial(){
+  lcd.init();
+  lcd.clear();
+  lcd.backlight();   
+  memset(LCD_row1, '\0', sizeof(LCD_row1));         //show RPM and DIR on LCD row1
+  memset(LCD_row2, '\0', sizeof(LCD_row2));         //show steps on LCD row2
+  LCD_row1[0]='0';
+  LCD_row1[1]='0';
+  LCD_row1[2]='0';
+  LCD_row1[3]='0';
+  LCD_row1[4]=' ';
+  LCD_row1[5]='R';
+  LCD_row1[6]='P';
+  LCD_row1[7]='M';
+  LCD_row1[8]=' ';
+  LCD_row1[9]='D';
+  LCD_row1[10]='I';
+  LCD_row1[11]='R';
+  LCD_row1[12]=':'; 
+   
+  LCD_row2[4]=' ';
+  LCD_row2[5]='s';
+  LCD_row2[6]='t';
+  LCD_row2[7]='e';
+  LCD_row2[8]='p';
+  LCD_row2[9]='s';  
 }
 //==============================
 
@@ -362,7 +398,6 @@ ISR (TIMER5_OVF_vect) {
   } else {
     TIMSK5 = 0x00;     //timer5 stop
   }
-
 }
 //=============================
 
@@ -389,12 +424,7 @@ byte readCLPMspeed() {
 //interrupt detectABPhase
 //====================================
 void detectABPhase() {
- // noInterrupts();
- /*
-  APstatusAll[ABPhaseCounter] = digitalRead(encoderAPhase);
-  BPstatusAll[ABPhaseCounter] = digitalRead(encoderBPhase);  
-  ABPhaseCounter++;
-  */
+  //noInterrupts();
   APstatus = digitalRead(encoderAPhase);
   BPstatus = digitalRead(encoderBPhase);  
   
@@ -412,7 +442,49 @@ void detectABPhase() {
  // interrupts();
 }
 //=============================
+
+//====================================
+//show on LCD
+//====================================
+void showOnLcd(int row,char *information) {     
+      char buf[16];
+      int col=0;      
+      for (col=0;col<16;col++){
+          buf[col]=' ';
+          lcd.setCursor(col,row-1);
+          if(information[col] != '\0'){            
+            lcd.print(information[col]);
+          }else{
+            lcd.print(buf[col]);           
+          }               
+      }         
+}
+//==============================
+
+//====================================
+//show on LCD
+//====================================
+void stepChange(int receiveStep){
+  int buf=receiveStep;
+  int i=0;
+  int cul[4]={1000,100,10,1};
+  for(i=0;i<4;i++){
+    LCD_row2[i]=(buf / cul[i])+'0';
+    buf=buf % cul[i];   
+  }  
+  if(CLPM_CW_CCW){  
+    LCD_row1[13]='C';
+    LCD_row1[14]='C';
+    LCD_row1[15]='W';
+  }else{
+    LCD_row1[13]=' ';
+    LCD_row1[14]='C';
+    LCD_row1[15]='W';
+  }
+}
+//==============================
 //*===========================================*
+
 
 
 

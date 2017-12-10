@@ -74,6 +74,24 @@ void  CLPMTR::setCLPMTR_Forward(){
 //=============================
 
 //====================================
+//set Motor rotate CW
+//====================================
+boolean  CLPMTR::setCLPMTR_CW() {
+	digitalWrite(CLPMTR_DIR, HIGH);   //CW 0/CCW 1
+	return 0;                    
+}
+//=============================
+
+//====================================
+//set Motor rotate CCW
+//====================================
+boolean  CLPMTR::setCLPMTR_CCW(){
+	digitalWrite(CLPMTR_DIR, LOW);
+	return 1;
+}
+//=============================
+
+//====================================
 //SET CLP MOTOR set HIGH for pulse 
 //give BJT B LOW then driver PUL get HIGH
 //====================================
