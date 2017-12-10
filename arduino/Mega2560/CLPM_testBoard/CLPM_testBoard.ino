@@ -3,7 +3,8 @@
 //版本：V1.0
 //配合硬體:
 //MEGA 2560
-//驗證Y/N:n
+//I2C LCD
+//CLP MOTOR AND DRIVER
 //function
 //(1)CW (2)CCW (3)RPM
 //備註：
@@ -11,10 +12,17 @@
 //馬達控制功能失效 i2c占用timer 改用TIMER4 與TIMER5
 //ENA如果設定為DISABLE 會失去靜態扭矩
 //CLPMotor driver(Hybird Servo Drive) Pulse need to set 1600
+//if there haven't thread,Please follow the steps listed below:
+//1.Sketch->Include Library -> Manage Libraries
+//2.type thread to search and install it
 //--------------------------------------
 #include <Wire.h>
 #include <CLP_MOTOR.h>
 #include <LiquidCrystal_I2C.h>
+#include <Thread.h>
+#include <ThreadController.h>
+ThreadController controll = ThreadController();
+Thread LCD_Thread = Thread();
  LiquidCrystal_I2C lcd(0x27,16,2);
 //*===========================================*
 //定義區
@@ -34,8 +42,8 @@ boolean CLPM_CW_CCW = 0;      //0 CW ,1 CCW
 //==============================
 //control board
 //====================================
-#define pin_btnCW 50
-#define pin_btnCCW 51
+#define pin_btnCW 48
+#define pin_btnCCW 49
 #define pin_testLED 52
 #define pin_CLPMspeed A0
 boolean btnCW_pushed = 0;
@@ -64,15 +72,11 @@ int stepCounter = 0;
 int ABPCounter = 0;
 byte  APstatus = 0;
 byte  BPstatus = 0;
-int ABPhaseCounter=0;
 char LCD_row1[16];        //0000 RPM DIR:CW
 char LCD_row2[16];        //0000 steps 
-//==============================
- 
+//============================== 
 //*===========================================*
-
-
-  
+ 
 //*===========================================*
 //初始化區
 //*===========================================*
@@ -80,12 +84,13 @@ void setup() {
   Serial.begin(9600);
   CLPMTR_initial();
   interrupt_initial();  
-  //Timer4_initial();
-  //Timer5_initial();
+  Timer4_initial();
+  Timer5_initial();
   controlBoard_initial();
   CLPMspeed_initial();
   LCD_initial();
-  delay(100);
+  thread_initial(); 
+  delay(1000);  
   Serial.println("start");
 }
 //*===========================================*
@@ -94,45 +99,12 @@ void setup() {
 //主程式區
 //*===========================================*
 void loop() { 
-  
-  static int counter = 0;
-  int counterLT=100*pulseChange/10;
-  CLPM_tester->setCLPMTR_LOW();
-  
-  if (counter < counterLT) {    
-    CLPM_tester->setCLPMTR_HIGH();
-    delayMicroseconds(50);
-    CLPM_tester->setCLPMTR_LOW();
-    delayMicroseconds(50);
-    counter++;    
-  }  
-  
-  if (counter == counterLT) {
-    int rp=receiveStep;        
-    stepChange(rp);  
-    showOnLcd(1,LCD_row1);    
-    showOnLcd(2,LCD_row2);
-    counter = counterLT+100;
-    receiveStep=0;
-  }
-
-  //
-  /*
-   boolean btnCW = digitalRead(pin_btnCW);   //BUTTON DOWN =LOW NORMAL=HIGH
+  controll.run();       
    static int once=0;
       if(once==0){
           once=1;
           JogMode();          
-      }
-       if (Timer4Counter > 1600) {
-              delay(20);
-              Serial.print(receiveStep);
-              Serial.println(F(" STEP"));
-              Serial.print(F("Timer4Counter: "));  
-               Serial.println(Timer4Counter);
-              Timer4Counter =0;
-      }      
-     */
+      }         
 }
 //*===========================================*
 
@@ -255,13 +227,21 @@ void LCD_initial(){
 //==============================
 
 //====================================
+//thread_initial
+//====================================
+void   thread_initial(){  
+  LCD_Thread.onRun(LCD_Callback);
+  LCD_Thread.setInterval(100);
+  // Adds myThread to the controll
+  controll.add(&LCD_Thread);
+ }
+//====================================
 //JOG模式
 //====================================
 void JogMode() {
   CLPMTRSpeed = readCLPMspeed(); //read Speed
   // Serial.print(F("CLPMTRSpeed:"));
   // Serial.println(CLPMTRSpeed);
-
   boolean btnCW = digitalRead(pin_btnCW);   //BUTTON DOWN =LOW NORMAL=HIGH
   boolean btnCCW = digitalRead(pin_btnCCW);   //BUTTON DOWN =LOW NORMAL=HIGH
     testbtnCW=0;
@@ -274,22 +254,19 @@ void JogMode() {
     btnCCW_pushed = 0;   
     //TimerStop();
   } else if (testbtnCW == 0 && btnCW_pushed == 0) {
-    //btnCW_pushed==1 express btnCW still push down,so can not enter here!
-    //CWcounter++;
-    btnCW_pushed = 1;
+    btnCW_pushed=1; //express btnCW still push down,so can not enter here!
+    //CWcounter++;   
    // Serial.println(F("btnCW"));
     //Serial.print(F("CWcounter"));
     //Serial.println(CWcounter);
     CLPMTR_JogStepSet(0, 0);
   } else if (btnCCW == 0 && btnCCW_pushed == 0) {
-    //btnCCW_pushed==1 express btnCCW still push down,so can not enter here!
-    btnCCW_pushed = 1;
+    btnCCW_pushed=1; //express btnCCW still push down,so can not enter here!    
     //Serial.println(F("btnCCW"));
     CLPMTR_JogStepSet(1, 0);
   }
 }
 //==============================
-
 
 //====================================
 //timer start
@@ -315,13 +292,10 @@ void TimerStop() {
 void CLPMTR_JogStepSet(uint8_t CW_CCW, uint8_t CLPM_arrive) {
   //Serial.println(F( "CLPMTR_JogStepSet"));
   CLPM_tester->setCLPMTR_Enable();
-  if (CW_CCW == 0) {
-    //CW
-    CLPM_tester->setCLPMTR_Forward();
-    CLPM_CW_CCW=1;
-  } else if (CW_CCW == 1) {
-    //CCW
-    CLPM_tester->setCLPMTR_Reverse();
+  if (CW_CCW == 0) {    
+     CLPM_CW_CCW=CLPM_tester->setCLPMTR_CW();    
+  } else if (CW_CCW == 1) {    
+    CLPM_CW_CCW=CLPM_tester->setCLPMTR_CCW();
   }
   Timer4Counter = 0;
   //TCNT4 = Timer4CountSet[CLPMTRSpeed];
@@ -333,7 +307,6 @@ void CLPMTR_JogStepSet(uint8_t CW_CCW, uint8_t CLPM_arrive) {
 }
 //=============================
 
-
 //====================================
 //timer4 interrput ISR
 //create Pulse for CLPMOTOR driver
@@ -342,11 +315,7 @@ ISR (TIMER4_OVF_vect) {
   TIMSK4 = 0x00;     //timer4 stop
   TimerSW = !TimerSW;
   TCNT4  = Timer4CountSet[1];
-   //TCNT4 = Timer4CountSet[CLPMTRSpeed];
-  boolean btnCW = digitalRead(pin_btnCW);   //BUTTON DOWN =LOW NORMAL=HIGH
-  boolean btnCCW = digitalRead(pin_btnCCW);   //BUTTON DOWN =LOW NORMAL=HIGH
- 
-  //if (testbtnCW==0 || btnCCW==0) {
+   //TCNT4 = Timer4CountSet[CLPMTRSpeed];  
   if (!CLPM_testerArrive) {
     if (TimerSW) {
       CLPM_tester->setCLPMTR_HIGH();
@@ -358,15 +327,11 @@ ISR (TIMER4_OVF_vect) {
     }
     TIMSK4 = 0x01;       //timer4 start
   } else {
-    CLPM_tester->setCLPMTR_LOW();    
-    //Timer4Counter = 0;
+    CLPM_tester->setCLPMTR_LOW(); 
     TIMSK4 = 0x00;     //timer4 stop
   }
-
 }
 //=============================
-
-
 
 //====================================
 //timer5 interrput ISR
@@ -401,7 +366,6 @@ ISR (TIMER5_OVF_vect) {
 }
 //=============================
 
-
 //====================================
 //readCLPMspeed
 //0->1023
@@ -419,12 +383,11 @@ byte readCLPMspeed() {
 }
 //=============================
 
-
 //====================================
 //interrupt detectABPhase
 //====================================
 void detectABPhase() {
-  //noInterrupts();
+  noInterrupts();
   APstatus = digitalRead(encoderAPhase);
   BPstatus = digitalRead(encoderBPhase);  
   
@@ -439,7 +402,7 @@ void detectABPhase() {
       receiveStep++;
       ABPCounter = 0;
     }
- // interrupts();
+  interrupts();
 }
 //=============================
 
@@ -462,7 +425,7 @@ void showOnLcd(int row,char *information) {
 //==============================
 
 //====================================
-//show on LCD
+//stepChange int to char for show on LCD
 //====================================
 void stepChange(int receiveStep){
   int buf=receiveStep;
@@ -481,6 +444,18 @@ void stepChange(int receiveStep){
     LCD_row1[14]='C';
     LCD_row1[15]='W';
   }
+}
+//==============================
+
+//====================================
+//callback for LCD_Thread
+//show CLPMotor information on LCD
+//====================================
+void LCD_Callback(){           
+        int rp=receiveStep;        
+        stepChange(rp);  
+        showOnLcd(1,LCD_row1);    
+        showOnLcd(2,LCD_row2);    
 }
 //==============================
 //*===========================================*
